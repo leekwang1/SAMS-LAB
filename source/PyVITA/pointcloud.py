@@ -782,19 +782,122 @@ class PointCloud:
 
     @staticmethod
     def _contour_concave(points_2d, concavity=2.0):
-        """Concave Hull (alphashape 라이브러리)."""
-        import alphashape
-        from shapely.geometry import Polygon, MultiPolygon
-        alpha = 1.0 / max(concavity, 0.01)
-        shape = alphashape.alphashape(points_2d, alpha)
-        if shape is None or shape.is_empty:
-            return PointCloud._contour_convex(points_2d)
-        if isinstance(shape, MultiPolygon):
-            shape = max(shape.geoms, key=lambda g: g.area)
-        if isinstance(shape, Polygon):
-            coords = np.array(shape.exterior.coords)
-            return coords[:-1]  # 마지막 중복점 제거
-        return PointCloud._contour_convex(points_2d)
+        """Delaunay 기반 concave hull.
+
+        concavity는 유지된 API 이름이지만 UI에서는 Max Edge(m)로 사용한다.
+        Max Edge보다 긴 변을 가진 삼각형을 제거하고 남은 boundary loop를 반환한다.
+        """
+        points = np.unique(np.asarray(points_2d, dtype=np.float64), axis=0)
+        if len(points) < 4:
+            return points.copy()
+
+        from scipy.spatial import Delaunay, QhullError
+
+        max_edge = float(concavity)
+        if max_edge <= 0.0:
+            max_edge = PointCloud._estimate_concave_max_edge(points)
+
+        try:
+            tri = Delaunay(points)
+        except QhullError:
+            return PointCloud._contour_convex(points)
+
+        simplices = tri.simplices
+        tri_pts = points[simplices]
+        e01 = np.linalg.norm(tri_pts[:, 0] - tri_pts[:, 1], axis=1)
+        e12 = np.linalg.norm(tri_pts[:, 1] - tri_pts[:, 2], axis=1)
+        e20 = np.linalg.norm(tri_pts[:, 2] - tri_pts[:, 0], axis=1)
+        keep = np.maximum.reduce([e01, e12, e20]) <= max_edge
+
+        if not np.any(keep):
+            return points[:0]
+
+        boundary_edges = PointCloud._boundary_edges_from_triangles(simplices[keep])
+        loops = PointCloud._boundary_loops_from_edges(boundary_edges)
+        if not loops:
+            return points[:0]
+
+        loop = max(loops, key=lambda idx: PointCloud._polyline_area_abs(points[idx]))
+        contour = points[loop]
+        if len(contour) < 3 or PointCloud._polyline_area_abs(contour) <= 1e-12:
+            return points[:0]
+        if PointCloud._polygon_signed_area(contour) < 0:
+            contour = contour[::-1]
+        return contour
+
+    @staticmethod
+    def _estimate_concave_max_edge(points):
+        from scipy.spatial import cKDTree
+
+        tree = cKDTree(points)
+        dists, _ = tree.query(points, k=min(4, len(points)))
+        if dists.ndim == 1 or dists.shape[1] < 2:
+            return 1.0
+        nn = dists[:, 1:]
+        return float(np.percentile(nn[np.isfinite(nn)], 90.0) * 3.0)
+
+    @staticmethod
+    def _boundary_edges_from_triangles(triangles):
+        edges = np.vstack([
+            triangles[:, [0, 1]],
+            triangles[:, [1, 2]],
+            triangles[:, [2, 0]],
+        ])
+        edges = np.sort(edges, axis=1)
+        unique_edges, counts = np.unique(edges, axis=0, return_counts=True)
+        return unique_edges[counts == 1]
+
+    @staticmethod
+    def _boundary_loops_from_edges(edges):
+        if len(edges) == 0:
+            return []
+
+        adjacency = {}
+        unused = set()
+        for a, b in edges:
+            a = int(a)
+            b = int(b)
+            adjacency.setdefault(a, []).append(b)
+            adjacency.setdefault(b, []).append(a)
+            unused.add(tuple(sorted((a, b))))
+
+        loops = []
+        while unused:
+            start, current = unused.pop()
+            loop = [start, current]
+
+            while True:
+                candidates = []
+                for nxt in adjacency.get(current, []):
+                    edge = tuple(sorted((current, int(nxt))))
+                    if edge in unused:
+                        candidates.append(int(nxt))
+
+                if not candidates:
+                    break
+
+                if start in candidates and len(loop) > 2:
+                    nxt = start
+                else:
+                    non_start = [idx for idx in candidates if idx != start]
+                    nxt = non_start[0] if non_start else candidates[0]
+
+                unused.remove(tuple(sorted((current, nxt))))
+                if nxt == start:
+                    if len(loop) >= 3:
+                        loops.append(np.asarray(loop, dtype=np.int64))
+                    break
+
+                loop.append(nxt)
+                current = nxt
+
+        return loops
+
+    @staticmethod
+    def _polygon_signed_area(poly):
+        x = poly[:, 0]
+        y = poly[:, 1]
+        return float(0.5 * np.sum(x * np.roll(y, -1) - y * np.roll(x, -1)))
 
     @staticmethod
     def _contour_alpha(points_2d, alpha=0.0):

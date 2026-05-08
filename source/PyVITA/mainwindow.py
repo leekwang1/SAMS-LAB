@@ -605,11 +605,11 @@ class MainWindow(QMainWindow):
         self._chk_radial_midline.hide()
         self._spin_radial_midline_outer.hide()
         if method == 'concave':
-            self._contour_param_label.setText("Concavity:")
-            self._contour_param_spin.setRange(0.1, 50.0)
-            self._contour_param_spin.setValue(2.0)
-            self._contour_param_spin.setSingleStep(0.5)
-            self._contour_param_spin.setDecimals(1)
+            self._contour_param_label.setText("Max Edge:")
+            self._contour_param_spin.setRange(0.0, 100.0)
+            self._contour_param_spin.setValue(1.0)
+            self._contour_param_spin.setSingleStep(0.1)
+            self._contour_param_spin.setDecimals(2)
             self._contour_param_label.show()
             self._contour_param_spin.show()
         elif method == 'alpha':
