@@ -506,27 +506,62 @@ class PointCloud:
                 kwargs.get('outer_percentile', 90.0),
             )
         else:  # radial
-            return PointCloud._contour_radial(points_2d, kwargs.get('num_bins', 360))
+            return PointCloud._contour_radial(
+                points_2d,
+                kwargs.get('num_bins', 360),
+                kwargs.get('min_radius', 0.0),
+                kwargs.get('percentile', None),
+                kwargs.get('midline', False),
+                kwargs.get('outer_percentile', 90.0),
+            )
 
     @staticmethod
-    def _contour_radial(points_2d, num_bins=360):
+    def _contour_radial(points_2d, num_bins=360, min_radius=0.0,
+                        percentile=None, midline=False, outer_percentile=90.0):
         """각도 bin 최원점 방식."""
-        center = np.mean(points_2d, axis=0)
+        lo = np.percentile(points_2d, 2.0, axis=0)
+        hi = np.percentile(points_2d, 98.0, axis=0)
+        center = (lo + hi) * 0.5
         rel = points_2d - center
         angles = np.arctan2(rel[:, 1], rel[:, 0])
         dists = np.sqrt(rel[:, 0]**2 + rel[:, 1]**2)
+        min_radius = max(float(min_radius), 0.0)
+        if min_radius > 0.0:
+            candidate_mask = dists >= min_radius
+            if np.count_nonzero(candidate_mask) < 3:
+                return points_2d[:0]
+            points_2d = points_2d[candidate_mask]
+            angles = angles[candidate_mask]
+            dists = dists[candidate_mask]
         bin_edges = np.linspace(-np.pi, np.pi, num_bins + 1)
         bin_idx = np.digitize(angles, bin_edges) - 1
         bin_idx = np.clip(bin_idx, 0, num_bins - 1)
+        if midline:
+            outer_percentile = float(np.clip(outer_percentile, 55.0, 99.5))
+            inner_percentile = 100.0 - outer_percentile
+        elif percentile is not None:
+            percentile = float(np.clip(percentile, 50.0, 100.0))
 
         contour = []
         for b in range(num_bins):
             mask = bin_idx == b
             if not np.any(mask):
                 continue
-            far_idx = np.argmax(dists[mask])
             pt_indices = np.where(mask)[0]
-            contour.append(points_2d[pt_indices[far_idx]])
+            d_bin = dists[mask]
+            if midline:
+                r_in = PointCloud._fast_percentile(d_bin, inner_percentile)
+                r_out = PointCloud._fast_percentile(d_bin, outer_percentile)
+                r_mid = 0.5 * (r_in + r_out)
+                theta = 0.5 * (bin_edges[b] + bin_edges[b + 1])
+                contour.append(center + r_mid * np.array([np.cos(theta), np.sin(theta)]))
+                continue
+            if percentile is None:
+                local_idx = np.argmax(d_bin)
+            else:
+                k = PointCloud._percentile_index(len(d_bin), percentile)
+                local_idx = np.argpartition(d_bin, k)[k]
+            contour.append(points_2d[pt_indices[local_idx]])
 
         return np.array(contour) if len(contour) >= 3 else points_2d[:0]
 

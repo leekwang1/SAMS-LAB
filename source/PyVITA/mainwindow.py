@@ -5,10 +5,10 @@ from PyQt5.QtWidgets import (
     QStatusBar, QMessageBox, QSlider, QLabel, QComboBox, QActionGroup,
     QDockWidget, QWidget, QVBoxLayout, QListWidget, QPushButton,
     QHBoxLayout, QDoubleSpinBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QProgressDialog
+    QHeaderView, QAbstractItemView, QProgressDialog, QCheckBox, QLineEdit
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QCursor, QColor, QBrush
+from PyQt5.QtGui import QCursor, QColor, QBrush, QDoubleValidator
 from viewer3d import ViewerPanel
 from pointcloud import PointCloud, AxisConvention, SUPPORTED_EXTENSIONS
 class MainWindow(QMainWindow):
@@ -164,9 +164,7 @@ class MainWindow(QMainWindow):
         self._contour_combo.addItem("Concave Hull", "concave")
         self._contour_combo.addItem("Alpha Shape", "alpha")
         self._contour_combo.addItem("Top Circle", "circle")
-        self._contour_combo.addItem("@ Radial Percentile", "radial_percentile")
         self._contour_combo.addItem("@ Grid + Marching Squares", "grid_ms")
-        self._contour_combo.addItem("@@ Radial Midline", "radial_midline")
         self._contour_combo.currentIndexChanged.connect(self._on_contour_method_changed)
         contour_layout.addWidget(self._contour_combo)
         layout.addLayout(contour_layout)
@@ -191,6 +189,57 @@ class MainWindow(QMainWindow):
         self._contour_param_spin.hide()
         self._contour_param_label2.hide()
         self._contour_param_spin2.hide()
+        radial_min_layout = QHBoxLayout()
+        self._chk_radial_min_radius = QCheckBox("최소 반경")
+        self._chk_radial_min_radius.setChecked(True)
+        self._edit_radial_min_radius = QLineEdit("1.0")
+        self._edit_radial_min_radius.setValidator(QDoubleValidator(0.0, 10000.0, 3, self))
+        self._edit_radial_min_radius.setFixedWidth(64)
+        self._edit_radial_min_radius.setEnabled(True)
+        self._chk_radial_min_radius.toggled.connect(self._edit_radial_min_radius.setEnabled)
+        radial_min_layout.addWidget(self._chk_radial_min_radius)
+        radial_min_layout.addWidget(self._edit_radial_min_radius)
+        self._label_radial_min_radius_unit = QLabel("m")
+        radial_min_layout.addWidget(self._label_radial_min_radius_unit)
+        radial_min_layout.addStretch(1)
+        layout.addLayout(radial_min_layout)
+        self._chk_radial_min_radius.hide()
+        self._edit_radial_min_radius.hide()
+        self._label_radial_min_radius_unit.hide()
+        radial_percentile_layout = QHBoxLayout()
+        self._chk_radial_percentile = QCheckBox("Percentile")
+        self._chk_radial_percentile.setChecked(False)
+        self._spin_radial_percentile = QDoubleSpinBox()
+        self._spin_radial_percentile.setRange(50.0, 100.0)
+        self._spin_radial_percentile.setValue(98.0)
+        self._spin_radial_percentile.setSingleStep(0.5)
+        self._spin_radial_percentile.setDecimals(1)
+        self._spin_radial_percentile.setSuffix(" %")
+        self._spin_radial_percentile.setEnabled(False)
+        radial_percentile_layout.addWidget(self._chk_radial_percentile)
+        radial_percentile_layout.addWidget(self._spin_radial_percentile)
+        radial_percentile_layout.addStretch(1)
+        layout.addLayout(radial_percentile_layout)
+        self._chk_radial_percentile.hide()
+        self._spin_radial_percentile.hide()
+        radial_midline_layout = QHBoxLayout()
+        self._chk_radial_midline = QCheckBox("Midline")
+        self._chk_radial_midline.setChecked(False)
+        self._spin_radial_midline_outer = QDoubleSpinBox()
+        self._spin_radial_midline_outer.setRange(55.0, 99.5)
+        self._spin_radial_midline_outer.setValue(90.0)
+        self._spin_radial_midline_outer.setSingleStep(0.5)
+        self._spin_radial_midline_outer.setDecimals(1)
+        self._spin_radial_midline_outer.setSuffix(" %")
+        self._spin_radial_midline_outer.setEnabled(False)
+        radial_midline_layout.addWidget(self._chk_radial_midline)
+        radial_midline_layout.addWidget(self._spin_radial_midline_outer)
+        radial_midline_layout.addStretch(1)
+        layout.addLayout(radial_midline_layout)
+        self._chk_radial_midline.hide()
+        self._spin_radial_midline_outer.hide()
+        self._chk_radial_percentile.toggled.connect(self._on_radial_percentile_toggled)
+        self._chk_radial_midline.toggled.connect(self._on_radial_midline_toggled)
         self._on_contour_method_changed(self._contour_combo.currentIndex())
         # 외곽 추출 버튼
         self._btn_extract_contour = QPushButton("외곽 추출")
@@ -299,6 +348,14 @@ class MainWindow(QMainWindow):
     def _on_contour_vtx_size_changed(self, value):
         self.viewer._polyline_vtx_size = float(value)
         self.viewer.update()
+    def _on_radial_percentile_toggled(self, checked):
+        self._spin_radial_percentile.setEnabled(checked)
+        if checked and self._chk_radial_midline.isChecked():
+            self._chk_radial_midline.setChecked(False)
+    def _on_radial_midline_toggled(self, checked):
+        self._spin_radial_midline_outer.setEnabled(checked)
+        if checked and self._chk_radial_percentile.isChecked():
+            self._chk_radial_percentile.setChecked(False)
     def _apply_color(self, mode):
         if self.pc.points is None:
             return
@@ -540,6 +597,13 @@ class MainWindow(QMainWindow):
         method = self._contour_combo.currentData()
         self._contour_param_label2.hide()
         self._contour_param_spin2.hide()
+        self._chk_radial_min_radius.hide()
+        self._edit_radial_min_radius.hide()
+        self._label_radial_min_radius_unit.hide()
+        self._chk_radial_percentile.hide()
+        self._spin_radial_percentile.hide()
+        self._chk_radial_midline.hide()
+        self._spin_radial_midline_outer.hide()
         if method == 'concave':
             self._contour_param_label.setText("Concavity:")
             self._contour_param_spin.setRange(0.1, 50.0)
@@ -564,14 +628,13 @@ class MainWindow(QMainWindow):
             self._contour_param_spin.setDecimals(0)
             self._contour_param_label.show()
             self._contour_param_spin.show()
-        elif method == 'radial_percentile':
-            self._contour_param_label.setText("Percentile:")
-            self._contour_param_spin.setRange(90.0, 100.0)
-            self._contour_param_spin.setValue(98.0)
-            self._contour_param_spin.setSingleStep(0.5)
-            self._contour_param_spin.setDecimals(1)
-            self._contour_param_label.show()
-            self._contour_param_spin.show()
+            self._chk_radial_min_radius.show()
+            self._edit_radial_min_radius.show()
+            self._label_radial_min_radius_unit.show()
+            self._chk_radial_percentile.show()
+            self._spin_radial_percentile.show()
+            self._chk_radial_midline.show()
+            self._spin_radial_midline_outer.show()
         elif method == 'grid_ms':
             self._contour_param_label.setText("Grid (m):")
             self._contour_param_spin.setRange(0.001, 0.50)
@@ -580,21 +643,6 @@ class MainWindow(QMainWindow):
             self._contour_param_spin.setDecimals(2)
             self._contour_param_label.show()
             self._contour_param_spin.show()
-        elif method == 'radial_midline':
-            self._contour_param_label.setText("Outer %:")
-            self._contour_param_spin.setRange(55.0, 99.5)
-            self._contour_param_spin.setValue(90.0)
-            self._contour_param_spin.setSingleStep(0.5)
-            self._contour_param_spin.setDecimals(1)
-            self._contour_param_label.show()
-            self._contour_param_spin.show()
-            self._contour_param_label2.setText("Bins:")
-            self._contour_param_spin2.setRange(36, 720)
-            self._contour_param_spin2.setValue(360)
-            self._contour_param_spin2.setSingleStep(36)
-            self._contour_param_spin2.setDecimals(0)
-            self._contour_param_label2.show()
-            self._contour_param_spin2.show()
         elif method == 'circle':
             self._contour_param_label.setText("Points:")
             self._contour_param_spin.setRange(12, 360)
@@ -614,14 +662,20 @@ class MainWindow(QMainWindow):
             kwargs['alpha'] = self._contour_param_spin.value()
         elif method == 'radial':
             kwargs['num_bins'] = int(self._contour_param_spin.value())
-        elif method == 'radial_percentile':
-            kwargs['percentile'] = self._contour_param_spin.value()
-            kwargs['num_bins'] = 360
+            if self._chk_radial_min_radius.isChecked():
+                try:
+                    min_radius = float(self._edit_radial_min_radius.text())
+                except ValueError:
+                    min_radius = 1.0
+                    self._edit_radial_min_radius.setText("1.0")
+                kwargs['min_radius'] = max(0.0, min_radius)
+            if self._chk_radial_percentile.isChecked():
+                kwargs['percentile'] = self._spin_radial_percentile.value()
+            if self._chk_radial_midline.isChecked():
+                kwargs['midline'] = True
+                kwargs['outer_percentile'] = self._spin_radial_midline_outer.value()
         elif method == 'grid_ms':
             kwargs['grid_size'] = self._contour_param_spin.value()
-        elif method == 'radial_midline':
-            kwargs['outer_percentile'] = self._contour_param_spin.value()
-            kwargs['num_bins'] = int(self._contour_param_spin2.value())
         elif method == 'circle':
             kwargs['num_pts'] = int(self._contour_param_spin.value())
         return kwargs
