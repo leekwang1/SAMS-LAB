@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "PyVITA (Debug)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/source/PyVITA/main.py",
+            "cwd": "${workspaceFolder}/source/PyVITA",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "QT_DEBUG_PLUGINS": "1"
+            }
+        },
+        {
+            "name": "PyVITA (Release)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/source/PyVITA/main.py",
+            "cwd": "${workspaceFolder}/source/PyVITA",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "noDebug": true
+        }
+    ]
+}

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+  <rect x="4" y="4" width="16" height="16" rx="1" stroke="#888" fill="#444" opacity="0.3"/>
+  <rect x="4" y="4" width="16" height="16" rx="1" stroke="#aaa" fill="none"/>
+  <text x="12" y="15" text-anchor="middle" font-size="9" font-weight="bold" fill="#4fc3f7" stroke="none">T</text>
+  <line x1="12" y1="1" x2="12" y2="4" stroke="#4fc3f7" stroke-width="2"/>
+  <polygon points="9,3 12,0 15,3" fill="#4fc3f7" stroke="none"/>
+</svg>
