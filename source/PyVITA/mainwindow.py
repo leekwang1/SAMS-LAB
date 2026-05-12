@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         self._contour_combo.addItem("Alpha Shape", "alpha")
         self._contour_combo.addItem("Top Circle", "circle")
         self._contour_combo.addItem("@ Grid + Marching Squares", "grid_ms")
+        self._contour_combo.addItem("@ 5-Circle Fit", "five_circle")
         self._contour_combo.currentIndexChanged.connect(self._on_contour_method_changed)
         contour_layout.addWidget(self._contour_combo)
         layout.addLayout(contour_layout)
@@ -238,6 +239,13 @@ class MainWindow(QMainWindow):
         layout.addLayout(radial_midline_layout)
         self._chk_radial_midline.hide()
         self._spin_radial_midline_outer.hide()
+        five_circle_layout = QHBoxLayout()
+        self._chk_five_circle_guides = QCheckBox("Guide circles")
+        self._chk_five_circle_guides.setChecked(True)
+        five_circle_layout.addWidget(self._chk_five_circle_guides)
+        five_circle_layout.addStretch(1)
+        layout.addLayout(five_circle_layout)
+        self._chk_five_circle_guides.hide()
         self._chk_radial_percentile.toggled.connect(self._on_radial_percentile_toggled)
         self._chk_radial_midline.toggled.connect(self._on_radial_midline_toggled)
         self._on_contour_method_changed(self._contour_combo.currentIndex())
@@ -604,6 +612,7 @@ class MainWindow(QMainWindow):
         self._spin_radial_percentile.hide()
         self._chk_radial_midline.hide()
         self._spin_radial_midline_outer.hide()
+        self._chk_five_circle_guides.hide()
         if method == 'concave':
             self._contour_param_label.setText("Max Edge:")
             self._contour_param_spin.setRange(0.0, 100.0)
@@ -643,6 +652,15 @@ class MainWindow(QMainWindow):
             self._contour_param_spin.setDecimals(2)
             self._contour_param_label.show()
             self._contour_param_spin.show()
+        elif method == 'five_circle':
+            self._contour_param_label.setText("Pts/arc:")
+            self._contour_param_spin.setRange(20, 500)
+            self._contour_param_spin.setValue(160)
+            self._contour_param_spin.setSingleStep(20)
+            self._contour_param_spin.setDecimals(0)
+            self._contour_param_label.show()
+            self._contour_param_spin.show()
+            self._chk_five_circle_guides.show()
         elif method == 'circle':
             self._contour_param_label.setText("Points:")
             self._contour_param_spin.setRange(12, 360)
@@ -676,6 +694,8 @@ class MainWindow(QMainWindow):
                 kwargs['outer_percentile'] = self._spin_radial_midline_outer.value()
         elif method == 'grid_ms':
             kwargs['grid_size'] = self._contour_param_spin.value()
+        elif method == 'five_circle':
+            kwargs['n_per_arc'] = int(self._contour_param_spin.value())
         elif method == 'circle':
             kwargs['num_pts'] = int(self._contour_param_spin.value())
         return kwargs
@@ -746,6 +766,7 @@ class MainWindow(QMainWindow):
         method_label = self._contour_combo.currentText()
         pts_2d = sec['pts'][:, [sec['side_idx'], sec['up_idx']]]
         kwargs = self._get_contour_kwargs(method)
+        self.viewer.clear_guide_polylines()
         try:
             contour_2d = PointCloud.extract_contour(pts_2d, method=method, **kwargs)
         except Exception as e:
@@ -757,6 +778,7 @@ class MainWindow(QMainWindow):
             contour_3d[:, sec['fwd_idx']] = sec['y_pos']
             contour_3d[:, sec['up_idx']] = contour_2d[:, 1]
             self.viewer.set_polyline(contour_3d)
+            self._show_five_circle_guides_if_available(method, sec)
             # segment 분석
             self._analyze_segments(contour_2d, pts_2d)
             self.statusbar.showMessage(
@@ -766,6 +788,47 @@ class MainWindow(QMainWindow):
             self.viewer.clear_polyline()
             self._seg_table.setRowCount(0)
             self.statusbar.showMessage("외곽 추출 실패: 포인트 부족")
+    def _points_2d_to_section_3d(self, points_2d, sec):
+        points_2d = np.asarray(points_2d, dtype=np.float64)
+        points_3d = np.zeros((len(points_2d), 3), dtype=np.float64)
+        points_3d[:, sec['side_idx']] = points_2d[:, 0]
+        points_3d[:, sec['fwd_idx']] = sec['y_pos']
+        points_3d[:, sec['up_idx']] = points_2d[:, 1]
+        return points_3d
+    def _show_five_circle_guides_if_available(self, method, sec):
+        if method != 'five_circle' or not self._chk_five_circle_guides.isChecked():
+            return
+        info = getattr(PointCloud, 'last_contour_info', None)
+        if not info:
+            return
+        guides = []
+        for circle in info.get('circles', []):
+            pts_2d = circle.get('points')
+            color = circle.get('color', (0.7, 0.7, 0.7))
+            if pts_2d is None:
+                continue
+            guides.append((self._points_2d_to_section_3d(pts_2d, sec), color))
+        guide_points = []
+        for item in info.get('centers', []):
+            point_2d = item.get('point')
+            color = item.get('color', (0.7, 0.7, 0.7))
+            size = item.get('size', 9.0)
+            if point_2d is None:
+                continue
+            point_3d = self._points_2d_to_section_3d(np.asarray(point_2d)[None, :], sec)[0]
+            guide_points.append((point_3d, color, size, item.get('name', '')))
+        for item in info.get('junctions', []):
+            point_2d = item.get('point')
+            color = item.get('color', (1.0, 0.0, 1.0))
+            size = item.get('size', 7.0)
+            if point_2d is None:
+                continue
+            point_3d = self._points_2d_to_section_3d(np.asarray(point_2d)[None, :], sec)[0]
+            guide_points.append((point_3d, color, size, ''))
+        if guides:
+            self.viewer.set_guide_polylines(guides)
+        if guide_points:
+            self.viewer.set_guide_points(guide_points)
     def _analyze_segments(self, contour_2d, pts_2d):
         """각 segment별 수직방향 검색범위 내 점군의 최대거리 계산."""
         n = len(contour_2d)

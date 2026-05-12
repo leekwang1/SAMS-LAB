@@ -164,6 +164,8 @@ class Viewer3DWidget(QOpenGLWidget):
 
         # 폴리라인 + vertex
         self._polyline = None
+        self._guide_polylines = []
+        self._guide_points = []
         self._polyline_vtx_visible = True
         self._polyline_vtx_size = 5.0
 
@@ -269,6 +271,8 @@ class Viewer3DWidget(QOpenGLWidget):
         self._slice_planes = []
         self._active_slice = None
         self._polyline = None
+        self._guide_polylines = []
+        self._guide_points = []
         self._obb_dict.clear()
         self._mesh_vertices = None
         self._mesh_normals = None
@@ -330,8 +334,36 @@ class Viewer3DWidget(QOpenGLWidget):
         self._polyline = np.ascontiguousarray(points_3d, dtype=np.float32)
         self.update()
 
+    def set_guide_polylines(self, polylines):
+        """보조 폴리라인 설정. polylines: [(points_3d, color_rgb), ...]."""
+        self._guide_polylines = [
+            (np.ascontiguousarray(points, dtype=np.float32), tuple(color))
+            for points, color in polylines
+            if points is not None and len(points) >= 2
+        ]
+        self.update()
+
+    def set_guide_points(self, points):
+        guide_points = []
+        for item in points:
+            if len(item) < 3:
+                continue
+            point, color, size = item[:3]
+            label = item[3] if len(item) >= 4 else ""
+            if point is not None and len(point) == 3:
+                guide_points.append((np.asarray(point, dtype=np.float32), tuple(color), float(size), str(label)))
+        self._guide_points = guide_points
+        self.update()
+
+    def clear_guide_polylines(self):
+        self._guide_polylines = []
+        self._guide_points = []
+        self.update()
+
     def clear_polyline(self):
         self._polyline = None
+        self._guide_polylines = []
+        self._guide_points = []
         self.update()
 
     def set_marker(self, pos_3d, size=None):
@@ -474,6 +506,10 @@ class Viewer3DWidget(QOpenGLWidget):
         self._draw_highlight_seg()
         self._draw_marker()
         self._draw_measure()
+        if self._guide_polylines:
+            self._draw_guide_polylines()
+        if self._guide_points:
+            self._draw_guide_points()
         if self._polyline is not None:
             self._draw_polyline()
         if self._show_world_axes:
@@ -794,6 +830,28 @@ class Viewer3DWidget(QOpenGLWidget):
             glDrawArrays(GL_POINTS, 0, len(self._polyline))
         glDisableClientState(GL_VERTEX_ARRAY)
 
+    def _draw_guide_polylines(self):
+        glLineWidth(1.2)
+        glEnableClientState(GL_VERTEX_ARRAY)
+        for points, color in self._guide_polylines:
+            if len(points) < 2:
+                continue
+            glColor3f(float(color[0]), float(color[1]), float(color[2]))
+            glVertexPointer(3, GL_FLOAT, 0, points)
+            glDrawArrays(GL_LINE_LOOP, 0, len(points))
+        glDisableClientState(GL_VERTEX_ARRAY)
+
+    def _draw_guide_points(self):
+        glEnable(GL_POINT_SMOOTH)
+        glHint(GL_POINT_SMOOTH_HINT, GL_NICEST)
+        for point, color, size, _label in self._guide_points:
+            glPointSize(float(size))
+            glColor3f(float(color[0]), float(color[1]), float(color[2]))
+            glBegin(GL_POINTS)
+            glVertex3f(float(point[0]), float(point[1]), float(point[2]))
+            glEnd()
+        glDisable(GL_POINT_SMOOTH)
+
     def _draw_mesh(self):
         if self._mesh_vertices is None or self._mesh_count == 0 or not self._mesh_visible:
             return
@@ -956,6 +1014,15 @@ class Viewer3DWidget(QOpenGLWidget):
                 r, g, b = [int(c * 255) for c in color]
                 painter.setPen(QColor(r, g, b))
                 painter.drawText(sx + 5, sy - 5, label)
+        if self._guide_points:
+            painter.setFont(QFont("Arial", 9, QFont.Bold))
+            for point, color, _size, label in self._guide_points:
+                if not label:
+                    continue
+                sx, sy = self._project_to_screen(float(point[0]), float(point[1]), float(point[2]))
+                r, g, b = [int(max(0.0, min(1.0, float(c))) * 255) for c in color[:3]]
+                painter.setPen(QColor(r, g, b))
+                painter.drawText(sx + 8, sy - 8, label)
         # 측정 거리 라벨
         if self._measure_points:
             self._draw_measure_labels(painter)

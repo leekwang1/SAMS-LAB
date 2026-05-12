@@ -43,6 +43,8 @@ class AxisConvention(Enum):
 
 
 class PointCloud:
+    last_contour_info = None
+
     def __init__(self):
         self.points = None          # (N, 3) float64
         self.colors = None          # (N, 3) float32, 0~1
@@ -481,8 +483,10 @@ class PointCloud:
             contour: (M, 2) array - 외곽 폴리라인 점 목록
         """
         if len(points_2d) < 3:
+            PointCloud.last_contour_info = None
             return points_2d.copy()
 
+        PointCloud.last_contour_info = None
         if method == 'convex':
             return PointCloud._contour_convex(points_2d)
         elif method == 'concave':
@@ -499,6 +503,15 @@ class PointCloud:
             )
         elif method == 'grid_ms':
             return PointCloud._contour_grid_ms(points_2d, kwargs.get('grid_size', 0.05))
+        elif method == 'five_circle':
+            from five_circle_fit import fit_five_circle_contour
+            contour, info = fit_five_circle_contour(
+                points_2d,
+                n_per_arc=kwargs.get('n_per_arc', 160),
+                n_circle=kwargs.get('n_circle', 240),
+            )
+            PointCloud.last_contour_info = info
+            return contour
         elif method == 'radial_midline':
             return PointCloud._contour_radial_midline(
                 points_2d,
