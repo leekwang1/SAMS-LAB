@@ -1,4 +1,6 @@
 import os
+import json
+import time
 import numpy as np
 from PyQt5.QtWidgets import (
     QMainWindow, QToolBar, QAction, QFileDialog, QApplication,
@@ -281,6 +283,15 @@ class MainWindow(QMainWindow):
         self._btn_batch_surface.setToolTip("모든 slice의 외곽을 추출하고 extrusion하여 면 생성")
         self._btn_batch_surface.clicked.connect(self._batch_contour_surface)
         layout.addWidget(self._btn_batch_surface)
+        batch_option_layout = QHBoxLayout()
+        self._chk_batch_mesh = QCheckBox("Mesh 생성")
+        self._chk_batch_mesh.setChecked(False)
+        batch_option_layout.addWidget(self._chk_batch_mesh)
+        batch_option_layout.addStretch(1)
+        layout.addLayout(batch_option_layout)
+        self._btn_open_section_geojson = QPushButton("단면 GeoJSON 열기")
+        self._btn_open_section_geojson.clicked.connect(self._open_section_geojson)
+        layout.addWidget(self._btn_open_section_geojson)
         dock.setWidget(w)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
     def _busy(self, busy=True):
@@ -767,11 +778,16 @@ class MainWindow(QMainWindow):
         pts_2d = sec['pts'][:, [sec['side_idx'], sec['up_idx']]]
         kwargs = self._get_contour_kwargs(method)
         self.viewer.clear_guide_polylines()
+        elapsed = 0.0
         try:
+            start_time = time.perf_counter()
             contour_2d = PointCloud.extract_contour(pts_2d, method=method, **kwargs)
+            elapsed = time.perf_counter() - start_time
         except Exception as e:
             print(f"[Contour] {method} failed: {e}, fallback to radial")
+            start_time = time.perf_counter()
             contour_2d = PointCloud.extract_contour(pts_2d, method='radial')
+            elapsed = time.perf_counter() - start_time
         if len(contour_2d) >= 3:
             contour_3d = np.zeros((len(contour_2d), 3))
             contour_3d[:, sec['side_idx']] = contour_2d[:, 0]
@@ -782,7 +798,7 @@ class MainWindow(QMainWindow):
             # segment 분석
             self._analyze_segments(contour_2d, pts_2d)
             self.statusbar.showMessage(
-                f"외곽 추출 ({method_label}) | {len(contour_2d)} pts"
+                f"외곽 추출 ({method_label}) | {len(contour_2d)} pts | {elapsed:.3f} s"
             )
         else:
             self.viewer.clear_polyline()
@@ -966,6 +982,7 @@ class MainWindow(QMainWindow):
         thickness = self._spin_thickness.value()
         method = self._contour_combo.currentData()
         kwargs = self._get_contour_kwargs(method)
+        build_mesh = self._chk_batch_mesh.isChecked()
         total = len(self._slices)
         progress = QProgressDialog("외곽 면 생성 중...", "취소", 0, total, self)
         progress.setWindowTitle("전체 외곽 면 생성")
@@ -973,6 +990,7 @@ class MainWindow(QMainWindow):
         progress.setWindowModality(Qt.WindowModal)
         all_verts = []
         all_norms = []
+        section_features = []
         for si, y_pos in enumerate(self._slices):
             progress.setValue(si)
             QApplication.processEvents()
@@ -988,6 +1006,14 @@ class MainWindow(QMainWindow):
             except Exception:
                 contour_2d = PointCloud.extract_contour(pts_2d, method='radial')
             if len(contour_2d) < 3:
+                continue
+            section_features.append(
+                self._make_section_geojson_feature(
+                    si, y_pos, thickness, contour_2d,
+                    side_idx, fwd_idx, up_idx
+                )
+            )
+            if not build_mesh:
                 continue
             y_front = y_pos - half_interval
             y_back = y_pos + half_interval
@@ -1012,14 +1038,185 @@ class MainWindow(QMainWindow):
         if progress.wasCanceled():
             self.statusbar.showMessage("면 생성 취소됨")
             return
-        if not all_verts:
-            self.statusbar.showMessage("면 생성 실패: 유효한 외곽 없음")
+        if not section_features:
+            self.statusbar.showMessage("GeoJSON 생성 실패: 유효한 외곽 없음")
             return
-        verts = np.array(all_verts, dtype=np.float32)
-        norms = np.array(all_norms, dtype=np.float32)
-        self.viewer.set_mesh(verts, norms)
-        n_tris = len(verts) // 3
+        n_tris = 0
+        if build_mesh:
+            if not all_verts:
+                self.statusbar.showMessage("면 생성 실패: 유효한 외곽 없음")
+                return
+            verts = np.array(all_verts, dtype=np.float32)
+            norms = np.array(all_norms, dtype=np.float32)
+            self.viewer.set_mesh(verts, norms)
+            n_tris = len(verts) // 3
+        else:
+            self.viewer.clear_mesh()
+        geojson_path = self._save_batch_section_geojson(
+            section_features, interval, thickness, method, kwargs,
+            side_idx, fwd_idx, up_idx
+        )
+        saved_msg = f" | GeoJSON: {os.path.basename(geojson_path)}" if geojson_path else ""
+        mesh_msg = f"{n_tris} triangles" if build_mesh else "Mesh off"
         self.statusbar.showMessage(
             f"전체 외곽 면 생성 완료 | {total} slices | "
-            f"{n_tris} triangles | 방식: {method}"
+            f"{mesh_msg} | 방식: {method}{saved_msg}"
         )
+    def _open_section_geojson(self):
+        start_dir = ""
+        source_path = getattr(self.pc, 'filepath', None)
+        if source_path:
+            start_dir = os.path.dirname(source_path)
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "단면 GeoJSON 열기", start_dir,
+            "GeoJSON (*.geojson *.json);;All Files (*)"
+        )
+        if not filepath:
+            return
+        try:
+            self._load_section_geojson(filepath)
+        except Exception as e:
+            QMessageBox.critical(self, "GeoJSON 열기 실패", f"GeoJSON 파일을 열 수 없습니다:\n{e}")
+
+    def _load_section_geojson(self, filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        features = data.get("features", [])
+        if not isinstance(features, list):
+            raise ValueError("features 배열이 없습니다.")
+
+        conv = self.pc_aligned.convention if self.pc_aligned is not None else self.pc.convention
+        side_idx = conv.side_index
+        fwd_idx = conv.forward_index
+        up_idx = conv.up_index
+        polylines = []
+        vertex_points = []
+        line_color = (1.0, 0.95, 0.05)
+        vertex_color = (1.0, 0.3, 0.0)
+
+        for feature in features:
+            props = feature.get("properties", {})
+            if props.get("DataType") not in (None, "CL_SECTION"):
+                continue
+            geom = feature.get("geometry", {})
+            if geom.get("type") != "LineString":
+                continue
+            coords = np.asarray(geom.get("coordinates", []), dtype=np.float64)
+            if coords.ndim != 2 or coords.shape[0] < 2 or coords.shape[1] < 2:
+                continue
+            origin = self._section_origin_from_feature(props, fwd_idx)
+            y_pos = float(origin[fwd_idx]) if origin is not None else 0.0
+            points_3d = np.zeros((len(coords), 3), dtype=np.float64)
+            points_3d[:, side_idx] = coords[:, 0]
+            points_3d[:, fwd_idx] = y_pos
+            points_3d[:, up_idx] = coords[:, 1]
+            polylines.append((points_3d, line_color))
+            vertex_points.append(points_3d)
+
+        if not polylines:
+            raise ValueError("표시 가능한 CL_SECTION LineString이 없습니다.")
+        self.viewer.clear_polyline()
+        self.viewer.set_guide_polylines(polylines)
+        self.viewer.set_guide_vertex_clouds([
+            (np.vstack(vertex_points), vertex_color, self._spin_vtx_size.value())
+        ])
+        self.statusbar.showMessage(
+            f"단면 GeoJSON 표시 | {os.path.basename(filepath)} | {len(polylines)} sections"
+        )
+
+    def _section_origin_from_feature(self, props, fwd_idx):
+        shapes = props.get("SectionShapes", [])
+        if not shapes:
+            return None
+        origin = shapes[0].get("SectionOrigin")
+        if origin is None or len(origin) <= fwd_idx:
+            return None
+        return np.asarray(origin, dtype=np.float64)
+
+    def _make_section_geojson_feature(self, slice_index, y_pos, thickness, contour_2d,
+                                      side_idx, fwd_idx, up_idx):
+        contour_2d = np.asarray(contour_2d, dtype=np.float64)
+        origin = self._section_origin_from_contour(contour_2d, y_pos, side_idx, fwd_idx, up_idx)
+        coordinates = [
+            [float(pt[0]), float(pt[1]), 0.0]
+            for pt in contour_2d
+        ]
+        return {
+            "type": "Feature",
+            "properties": {
+                "DataType": "CL_SECTION",
+                "SectionID": f"SID_{slice_index + 1:04d}",
+                "SectionShapes": [
+                    {
+                        "OffsetX": 0,
+                        "OffsetY": 0,
+                        "Thickness": float(thickness),
+                        "ThicknessUnit": "m",
+                        "SectionOrigin": [float(v) for v in origin],
+                    }
+                ],
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": coordinates,
+            },
+        }
+
+    def _section_origin_from_contour(self, contour_2d, y_pos, side_idx, fwd_idx, up_idx):
+        side = contour_2d[:, 0]
+        up = contour_2d[:, 1]
+        side_center = 0.5 * (float(np.min(side)) + float(np.max(side)))
+        up_max = float(np.max(up))
+        up_span = max(float(np.max(up) - np.min(up)), 1e-9)
+        top_mask = up >= up_max - up_span * 0.03
+        candidate_idx = np.where(top_mask)[0]
+        if len(candidate_idx) == 0:
+            candidate_idx = np.array([int(np.argmax(up))])
+        best_local = int(np.argmin(np.abs(side[candidate_idx] - side_center)))
+        best_idx = int(candidate_idx[best_local])
+        origin = np.zeros(3, dtype=np.float64)
+        origin[side_idx] = contour_2d[best_idx, 0]
+        origin[fwd_idx] = y_pos
+        origin[up_idx] = contour_2d[best_idx, 1]
+        return origin
+
+    def _save_batch_section_geojson(self, features, interval, thickness, method, kwargs,
+                                    side_idx, fwd_idx, up_idx):
+        if not features:
+            return None
+        source_path = getattr(self.pc, 'filepath', None) or getattr(self.pc_aligned, 'filepath', None)
+        if source_path:
+            folder = os.path.dirname(source_path)
+            stem = os.path.splitext(os.path.basename(source_path))[0]
+        else:
+            folder = os.getcwd()
+            stem = "sections"
+        method_name = self._safe_filename_part(str(method))
+        output_path = os.path.join(folder, f"{stem}_{method_name}.geojson")
+        data = {
+            "type": "FeatureCollection",
+            "name": "KICT_터널단면생_v1",
+            "crs": {
+                "type": "name",
+                "properties": {
+                    "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
+                }
+            },
+            "features": features,
+        }
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent="\t")
+        except Exception as e:
+            QMessageBox.warning(self, "GeoJSON 저장 실패", f"GeoJSON 파일 저장에 실패했습니다:\n{e}")
+            return None
+        return output_path
+
+    def _safe_filename_part(self, text):
+        safe = []
+        for ch in text:
+            if ch.isalnum() or ch in ("-", "_"):
+                safe.append(ch)
+            else:
+                safe.append("_")
+        return "".join(safe).strip("_") or "contour"

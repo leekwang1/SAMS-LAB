@@ -165,6 +165,7 @@ class Viewer3DWidget(QOpenGLWidget):
         # 폴리라인 + vertex
         self._polyline = None
         self._guide_polylines = []
+        self._guide_vertex_clouds = []
         self._guide_points = []
         self._polyline_vtx_visible = True
         self._polyline_vtx_size = 5.0
@@ -272,6 +273,7 @@ class Viewer3DWidget(QOpenGLWidget):
         self._active_slice = None
         self._polyline = None
         self._guide_polylines = []
+        self._guide_vertex_clouds = []
         self._guide_points = []
         self._obb_dict.clear()
         self._mesh_vertices = None
@@ -355,14 +357,24 @@ class Viewer3DWidget(QOpenGLWidget):
         self._guide_points = guide_points
         self.update()
 
+    def set_guide_vertex_clouds(self, clouds):
+        self._guide_vertex_clouds = [
+            (np.ascontiguousarray(points, dtype=np.float32), tuple(color), float(size))
+            for points, color, size in clouds
+            if points is not None and len(points) > 0
+        ]
+        self.update()
+
     def clear_guide_polylines(self):
         self._guide_polylines = []
+        self._guide_vertex_clouds = []
         self._guide_points = []
         self.update()
 
     def clear_polyline(self):
         self._polyline = None
         self._guide_polylines = []
+        self._guide_vertex_clouds = []
         self._guide_points = []
         self.update()
 
@@ -508,6 +520,8 @@ class Viewer3DWidget(QOpenGLWidget):
         self._draw_measure()
         if self._guide_polylines:
             self._draw_guide_polylines()
+        if self._guide_vertex_clouds:
+            self._draw_guide_vertex_clouds()
         if self._guide_points:
             self._draw_guide_points()
         if self._polyline is not None:
@@ -839,6 +853,17 @@ class Viewer3DWidget(QOpenGLWidget):
             glColor3f(float(color[0]), float(color[1]), float(color[2]))
             glVertexPointer(3, GL_FLOAT, 0, points)
             glDrawArrays(GL_LINE_LOOP, 0, len(points))
+        glDisableClientState(GL_VERTEX_ARRAY)
+
+    def _draw_guide_vertex_clouds(self):
+        glEnableClientState(GL_VERTEX_ARRAY)
+        for points, color, size in self._guide_vertex_clouds:
+            if len(points) == 0:
+                continue
+            glPointSize(float(size))
+            glColor3f(float(color[0]), float(color[1]), float(color[2]))
+            glVertexPointer(3, GL_FLOAT, 0, points)
+            glDrawArrays(GL_POINTS, 0, len(points))
         glDisableClientState(GL_VERTEX_ARRAY)
 
     def _draw_guide_points(self):

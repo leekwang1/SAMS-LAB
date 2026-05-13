@@ -1,3 +1,4 @@
 source/PyVITA/__pycache__/*
 *.ply
 *.las
+*.geojson
