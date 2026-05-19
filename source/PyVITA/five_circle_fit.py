@@ -1,4 +1,6 @@
 """Adapter for the 5-circle tunnel profile fitter."""
+import json
+import os
 import numpy as np
 
 
@@ -66,7 +68,53 @@ def _circle_polyline(center, radius, n=240):
     return c[None, :] + float(radius) * np.column_stack((np.cos(theta), np.sin(theta)))
 
 
-def fit_five_circle_contour(points_2d, n_per_arc=160, n_circle=240, **params):
+def _json_safe(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _write_debug_json(path, payload):
+    if not path:
+        return
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_json_safe(payload), f, ensure_ascii=False, indent=2)
+
+
+def _compact_accuracy(acc):
+    if not isinstance(acc, dict):
+        return {}
+    keys = ("model_mode", "mae", "rmse", "p50", "p95", "p99", "max", "count")
+    return {k: acc[k] for k in keys if k in acc}
+
+
+def _compact_refined(refined):
+    keys = (
+        "o1_center", "r1", "a1_deg",
+        "o2_left_center", "o2_right_center", "r2", "a2_deg",
+        "o3_left_center", "o3_right_center", "r3",
+        "j1_left", "j1_right", "j2_left", "j2_right",
+        "a2_unsupported_ratio",
+    )
+    return {k: refined[k] for k in keys if k in refined}
+
+
+def _compact_initial_fit(initial_fit):
+    if not isinstance(initial_fit, dict):
+        return {}
+    return _compact_refined(initial_fit)
+
+
+def fit_five_circle_contour(points_2d, n_per_arc=160, n_circle=240, debug_path=None, debug_meta=None, **params):
     """Fit the 5-circle model and return a sampled contour plus guide circles."""
     uv = np.asarray(points_2d, dtype=np.float64)
     if uv.ndim != 2 or uv.shape[1] != 2:
@@ -104,6 +152,21 @@ def fit_five_circle_contour(points_2d, n_per_arc=160, n_circle=240, **params):
         close_polygon=False,
     )
     contour = np.asarray(profile["polyline"], dtype=np.float64) + offset[None, :]
+
+    if debug_path:
+        _write_debug_json(debug_path, {
+            "source": "python",
+            "meta": debug_meta or {},
+            "point_count": int(len(uv)),
+            "offset": offset,
+            "params": run_kwargs,
+            "initial_fit": _compact_initial_fit(model5.get("initial_fit", {})),
+            "refined": _compact_refined(refined),
+            "final_angles": final_angles,
+            "accuracy": _compact_accuracy(model5.get("accuracy", {})),
+            "profile_fit": np.asarray(profile["polyline"], dtype=np.float64),
+            "a3_deg": a3_deg,
+        })
 
     def _offset_point(name):
         return np.asarray(refined[name], dtype=np.float64) + offset

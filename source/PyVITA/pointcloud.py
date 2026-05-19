@@ -125,6 +125,30 @@ class PointCloud:
 
         return len(self.points)
 
+    def export_xyz_ply(self, filepath, points):
+        """Save xyz-only binary PLY in original/world coordinates."""
+        points = np.asarray(points, dtype=np.float64)
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError("points must have shape (N, 3)")
+
+        offset = self.offset if self.offset is not None else np.zeros(3, dtype=np.float64)
+        world_points = np.ascontiguousarray(points + offset[None, :], dtype='<f8')
+
+        with open(filepath, 'wb') as f:
+            header = [
+                'ply',
+                'format binary_little_endian 1.0',
+                'comment SAMSLab xyz-only aligned export',
+                f'element vertex {len(world_points)}',
+                'property double x',
+                'property double y',
+                'property double z',
+                'end_header',
+            ]
+            f.write(('\n'.join(header) + '\n').encode('ascii'))
+            f.write(world_points.tobytes())
+        return True
+
     @staticmethod
     def _parse_ply(filepath):
         with open(filepath, 'rb') as f:
@@ -509,6 +533,8 @@ class PointCloud:
                 points_2d,
                 n_per_arc=kwargs.get('n_per_arc', 160),
                 n_circle=kwargs.get('n_circle', 240),
+                debug_path=kwargs.get('debug_path'),
+                debug_meta=kwargs.get('debug_meta'),
             )
             PointCloud.last_contour_info = info
             return contour
