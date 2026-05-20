@@ -1,4 +1,5 @@
 source/PyVITA/__pycache__/*
+source/PyVITA/five_circle_debug_py/*
 *.ply
 *.las
 *.geojson

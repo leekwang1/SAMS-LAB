@@ -1,4 +1,4 @@
-import os
+﻿import os
 import json
 import time
 import numpy as np
@@ -43,32 +43,38 @@ class MainWindow(QMainWindow):
         act_open.setShortcut("Ctrl+O")
         act_open.triggered.connect(self._open_file)
         toolbar.addAction(act_open)
+        self.act_save = QAction("파일 저장", self)
+        self.act_save.setShortcut("Ctrl+S")
+        self.act_save.setEnabled(False)
+        self.act_save.triggered.connect(self._save_aligned_file)
+        toolbar.addAction(self.act_save)
         toolbar.addSeparator()
         # 좌표계 선택
-        toolbar.addWidget(QLabel(" 좌표계: "))
+        toolbar.addWidget(QLabel(" 좌표계 "))
         self._conv_combo = QComboBox()
         self._conv_combo.addItem("ENU (Z-Up)", AxisConvention.ENU)
         self._conv_combo.addItem("EDN (Y-Up)", AxisConvention.EDN)
         self._conv_combo.currentIndexChanged.connect(self._on_convention_changed)
         toolbar.addWidget(self._conv_combo)
         toolbar.addSeparator()
-        # 방향 잡기
+        # 방향 찾기
         self._axis_method_combo = QComboBox()
         self._axis_method_combo.addItem("PCA", "PCA")
         self._axis_method_combo.addItem("OBB", "OBB")
         self._axis_method_combo.setCurrentIndex(1)
         toolbar.addWidget(self._axis_method_combo)
-        self.act_find_axes = QAction("방향 잡기", self)
+        self.act_find_axes = QAction("방향 찾기", self)
         self.act_find_axes.setEnabled(False)
         self.act_find_axes.triggered.connect(self._find_axes)
         toolbar.addAction(self.act_find_axes)
         self.act_rot_cw = QAction("↻90", self)
-        self.act_rot_cw.setToolTip("W축 기준 시계방향 90° 회전")
+        self.act_rot_cw.setToolTip("W축 기준 시계방향 90도 회전")
+        self.act_save.setEnabled(False)
         self.act_rot_cw.setEnabled(False)
         self.act_rot_cw.triggered.connect(lambda: self._rotate_axes(90))
         toolbar.addAction(self.act_rot_cw)
         self.act_rot_ccw = QAction("↺90", self)
-        self.act_rot_ccw.setToolTip("W축 기준 반시계방향 90° 회전")
+        self.act_rot_ccw.setToolTip("W축 기준 반시계방향 90도 회전")
         self.act_rot_ccw.setEnabled(False)
         self.act_rot_ccw.triggered.connect(lambda: self._rotate_axes(-90))
         toolbar.addAction(self.act_rot_ccw)
@@ -81,6 +87,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self._act_obb_box)
         self.act_align = QAction("정렬", self)
         self.act_align.setEnabled(False)
+        self.act_save.setEnabled(False)
         self.act_align.triggered.connect(self._align)
         toolbar.addAction(self.act_align)
         toolbar.addSeparator()
@@ -119,6 +126,27 @@ class MainWindow(QMainWindow):
         self._spin_thickness.setSuffix(" m")
         param_layout.addWidget(self._spin_thickness)
         layout.addLayout(param_layout)
+        floor_layout = QHBoxLayout()
+        self._chk_floor_buffer = QCheckBox("\ubc14\ub2e5 \uc81c\uc678")
+        self._chk_floor_buffer.setChecked(False)
+        self._chk_floor_buffer.setToolTip(
+            "\uac01 \ub2e8\uba74\uc758 \ud558\uc704 2% \ub192\uc774\ub97c \ubc14\ub2e5 \uae30\uc900\uc73c\ub85c \ubcf4\uace0, "
+            "\uc9c0\uc815 \uac70\ub9ac \uc774\ub0b4\uc758 \uc810\uc744 \uc678\uacfd \ucd94\ucd9c\uc5d0\uc11c \uc81c\uc678\ud569\ub2c8\ub2e4."
+        )
+        self._spin_floor_buffer = QDoubleSpinBox()
+        self._spin_floor_buffer.setRange(0.0, 5.0)
+        self._spin_floor_buffer.setValue(1.0)
+        self._spin_floor_buffer.setSingleStep(0.05)
+        self._spin_floor_buffer.setDecimals(2)
+        self._spin_floor_buffer.setSuffix(" m")
+        self._spin_floor_buffer.setEnabled(False)
+        self._chk_floor_buffer.toggled.connect(self._spin_floor_buffer.setEnabled)
+        self._chk_floor_buffer.toggled.connect(self._on_floor_buffer_changed)
+        self._spin_floor_buffer.valueChanged.connect(self._on_floor_buffer_changed)
+        floor_layout.addWidget(self._chk_floor_buffer)
+        floor_layout.addWidget(self._spin_floor_buffer)
+        floor_layout.addStretch(1)
+        layout.addLayout(floor_layout)
         # Slice 생성 / 삭제
         slice_btn_layout = QHBoxLayout()
         self._btn_create_slices = QPushButton("Slice 생성")
@@ -146,7 +174,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_layout)
         # 측정 도구
         measure_layout = QHBoxLayout()
-        self._btn_measure = QPushButton("📏 거리 측정")
+        self._btn_measure = QPushButton("두 점 거리 측정")
         self._btn_measure.setCheckable(True)
         self._btn_measure.setEnabled(False)
         self._btn_measure.toggled.connect(self._on_measure_toggled)
@@ -156,7 +184,7 @@ class MainWindow(QMainWindow):
         self._btn_measure_clear.clicked.connect(self._on_measure_clear)
         measure_layout.addWidget(self._btn_measure_clear)
         layout.addLayout(measure_layout)
-        # ── 외곽 추출 영역 ──
+        # 외곽 추출 영역
         # 방식 선택
         contour_layout = QHBoxLayout()
         contour_layout.addWidget(QLabel("외곽:"))
@@ -245,9 +273,13 @@ class MainWindow(QMainWindow):
         self._chk_five_circle_guides = QCheckBox("Guide circles")
         self._chk_five_circle_guides.setChecked(True)
         five_circle_layout.addWidget(self._chk_five_circle_guides)
+        self._chk_five_circle_debug = QCheckBox("Debug JSON")
+        self._chk_five_circle_debug.setChecked(False)
+        five_circle_layout.addWidget(self._chk_five_circle_debug)
         five_circle_layout.addStretch(1)
         layout.addLayout(five_circle_layout)
         self._chk_five_circle_guides.hide()
+        self._chk_five_circle_debug.hide()
         self._chk_radial_percentile.toggled.connect(self._on_radial_percentile_toggled)
         self._chk_radial_midline.toggled.connect(self._on_radial_midline_toggled)
         self._on_contour_method_changed(self._contour_combo.currentIndex())
@@ -295,7 +327,7 @@ class MainWindow(QMainWindow):
         dock.setWidget(w)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
     def _busy(self, busy=True):
-        """시간이 걸리는 작업 시 커서 변경."""
+        # 색상 모드 시그널 연결 (데이터 접근 필요하므로 mainwindow에서)
         if busy:
             QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
             QApplication.processEvents()
@@ -367,6 +399,9 @@ class MainWindow(QMainWindow):
     def _on_contour_vtx_size_changed(self, value):
         self.viewer._polyline_vtx_size = float(value)
         self.viewer.update()
+    def _on_floor_buffer_changed(self, *args):
+        if self._section_active and self._current_section is not None:
+            self._update_floor_buffer_guide()
     def _on_radial_percentile_toggled(self, checked):
         self._spin_radial_percentile.setEnabled(checked)
         if checked and self._chk_radial_midline.isChecked():
@@ -412,6 +447,7 @@ class MainWindow(QMainWindow):
         self.viewer.add_layer("원본", self.pc.points, self.pc.colors)
         self.act_find_axes.setEnabled(True)
         self.act_align.setEnabled(False)
+        self.act_save.setEnabled(False)
         self.act_rot_cw.setEnabled(False)
         self.act_rot_ccw.setEnabled(False)
         self._chk_original.setEnabled(True)
@@ -429,6 +465,34 @@ class MainWindow(QMainWindow):
             f"Offset: ({self.pc.offset[0]:.1f}, {self.pc.offset[1]:.1f}, {self.pc.offset[2]:.1f})"
         )
     # ── 드래그앤드롭 ──
+    def _save_aligned_file(self):
+        if self.pc_aligned is None:
+            QMessageBox.information(self, "알림", "정렬을 먼저 실행해야 저장할 수 있습니다.")
+            return
+
+        source_path = self.pc.filepath or ""
+        folder = os.path.dirname(source_path) if source_path else ""
+        stem = os.path.splitext(os.path.basename(source_path))[0] if source_path else "aligned"
+        default_path = os.path.join(folder, f"{stem}_aligned.ply") if folder else f"{stem}_aligned.ply"
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Save Aligned PLY", default_path,
+            "PLY Files (*.ply);;All Files (*)"
+        )
+        if not filepath:
+            return
+        if os.path.splitext(filepath)[1].lower() != '.ply':
+            filepath += '.ply'
+
+        self._busy(True)
+        try:
+            self.pc.export_xyz_ply(filepath, self.pc_aligned.points)
+        except Exception as e:
+            QMessageBox.critical(self, "저장 실패", f"정렬 PLY 저장 실패:\n{e}")
+            self._busy(False)
+            return
+        self._busy(False)
+        self.statusbar.showMessage(f"정렬 PLY 저장 완료 | {os.path.basename(filepath)}")
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
@@ -504,12 +568,12 @@ class MainWindow(QMainWindow):
         if method == 'OBB':
             self.statusbar.showMessage(
                 f"{method}{swap_tag} | U: [{primary[0]:.3f}, {primary[1]:.3f}, {primary[2]:.3f}] | "
-                f"장축: {ev[0]:.2f}, 단축: {ev[1]:.2f}, 높이: {ev[2]:.2f}"
+                f"폭: {ev[0]:.2f}, 길이: {ev[1]:.2f}, 높이: {ev[2]:.2f}"
             )
         else:
             self.statusbar.showMessage(
                 f"{method}{swap_tag} | U: [{primary[0]:.3f}, {primary[1]:.3f}, {primary[2]:.3f}] | "
-                f"고유값 비: {ev[0]/ev.sum():.1%}, {ev[1]/ev.sum():.1%}, {ev[2]/ev.sum():.1%}"
+                f"고유값 비율 {ev[0]/ev.sum():.1%}, {ev[1]/ev.sum():.1%}, {ev[2]/ev.sum():.1%}"
             )
     def _align(self):
         self._busy(True)
@@ -533,6 +597,7 @@ class MainWindow(QMainWindow):
         self.viewer.set_layer_visible("원본", False)
         self._chk_aligned.setEnabled(True)
         self._chk_aligned.setChecked(True)
+        self.act_save.setEnabled(True)
         # 정렬 레이어 OBB (AABB — 축 정렬 상태이므로)
         pmin = aligned_points.min(axis=0)
         pmax = aligned_points.max(axis=0)
@@ -546,9 +611,9 @@ class MainWindow(QMainWindow):
         fwd_label = "Y" if conv == AxisConvention.ENU else "Z"
         up_label = "Z" if conv == AxisConvention.ENU else "Y"
         axes_list = [
-            (conv.forward_vector(), (1.0, 1.0, 0.0), f"U → {fwd_label}"),
-            (conv.side_vector(),    (0.0, 1.0, 1.0), "V → X"),
-            (conv.up_vector(),      (1.0, 0.0, 1.0), f"W → {up_label}"),
+            (conv.forward_vector(), (1.0, 1.0, 0.0), f"U ??{fwd_label}"),
+            (conv.side_vector(),    (0.0, 1.0, 1.0), "V ??X"),
+            (conv.up_vector(),      (1.0, 0.0, 1.0), f"W ??{up_label}"),
         ]
         pmin = aligned_points.min(axis=0)
         pmax = aligned_points.max(axis=0)
@@ -560,7 +625,7 @@ class MainWindow(QMainWindow):
         self._slice_list.clear()
         self.viewer.clear_slices()
         self.statusbar.showMessage(
-            f"정렬 완료 ({conv.value}) | U→{fwd_label}, V→X, W→{up_label}"
+            f"정렬 완료 ({conv.value}) | U={fwd_label}, V=X, W={up_label}"
         )
     # ── Slice ──
     def _create_slices(self):
@@ -602,7 +667,7 @@ class MainWindow(QMainWindow):
         self._slices = []
         self._slice_list.clear()
         self._btn_batch_surface.setEnabled(False)
-        self.viewer.remove_layer("외곽면")
+        self.viewer.remove_layer("단면면")
         self.viewer.clear_slices()
         self.viewer.clear_polyline()
         self._btn_show_section.setEnabled(False)
@@ -624,6 +689,7 @@ class MainWindow(QMainWindow):
         self._chk_radial_midline.hide()
         self._spin_radial_midline_outer.hide()
         self._chk_five_circle_guides.hide()
+        self._chk_five_circle_debug.hide()
         if method == 'concave':
             self._contour_param_label.setText("Max Edge:")
             self._contour_param_spin.setRange(0.0, 100.0)
@@ -672,6 +738,7 @@ class MainWindow(QMainWindow):
             self._contour_param_label.show()
             self._contour_param_spin.show()
             self._chk_five_circle_guides.show()
+            self._chk_five_circle_debug.show()
         elif method == 'circle':
             self._contour_param_label.setText("Points:")
             self._contour_param_spin.setRange(12, 360)
@@ -710,6 +777,70 @@ class MainWindow(QMainWindow):
         elif method == 'circle':
             kwargs['num_pts'] = int(self._contour_param_spin.value())
         return kwargs
+    def _five_circle_debug_enabled(self):
+        return (
+            hasattr(self, '_chk_five_circle_debug')
+            and self._chk_five_circle_debug.isChecked()
+        )
+    def _five_circle_debug_dir(self):
+        source_path = getattr(self.pc, 'filepath', None) or getattr(self.pc_aligned, 'filepath', None)
+        if source_path:
+            base_dir = os.path.dirname(source_path)
+        else:
+            base_dir = os.getcwd()
+        return os.path.join(base_dir, "five_circle_debug_py")
+    def _five_circle_debug_kwargs(self, slice_index, y_pos, thickness, point_count):
+        if not self._five_circle_debug_enabled():
+            return {}
+        folder = self._five_circle_debug_dir()
+        filename = f"SID_{int(slice_index) + 1:04d}_five_debug_py.json"
+        return {
+            'debug_path': os.path.join(folder, filename),
+            'debug_meta': {
+                'section_id': f"SID_{int(slice_index) + 1:04d}",
+                'slice_index': int(slice_index),
+                'forward': float(y_pos),
+                'thickness': float(thickness),
+                'input_point_count': int(point_count),
+            }
+        }
+    def _floor_buffer_enabled(self):
+        return hasattr(self, '_chk_floor_buffer') and self._chk_floor_buffer.isChecked()
+    def _filter_floor_points(self, section_pts, up_idx):
+        if section_pts is None or len(section_pts) < 3 or not self._floor_buffer_enabled():
+            return section_pts, None, False
+        buffer = float(self._spin_floor_buffer.value())
+        floor_base = float(np.percentile(section_pts[:, up_idx], 2.0))
+        floor_level = floor_base + buffer
+        keep = section_pts[:, up_idx] > floor_level
+        filtered = section_pts[keep]
+        if len(filtered) < 3:
+            return section_pts, floor_level, False
+        return filtered, floor_level, True
+    def _floor_buffer_guides(self, sec):
+        if sec is None or not self._floor_buffer_enabled():
+            return []
+        section_pts = sec.get('pts')
+        if section_pts is None or len(section_pts) < 3:
+            return []
+        _filtered, floor_level, _used = self._filter_floor_points(section_pts, sec['up_idx'])
+        if floor_level is None:
+            return []
+        side_values = section_pts[:, sec['side_idx']]
+        side_min = float(np.min(side_values))
+        side_max = float(np.max(side_values))
+        if side_max - side_min < 1e-6:
+            side_min -= 0.5
+            side_max += 0.5
+        line = np.zeros((2, 3), dtype=np.float64)
+        line[:, sec['side_idx']] = [side_min, side_max]
+        line[:, sec['fwd_idx']] = sec['y_pos']
+        line[:, sec['up_idx']] = floor_level
+        return [(line, (1.0, 0.35, 0.05))]
+    def _update_floor_buffer_guide(self):
+        if not self._section_active or self._current_section is None:
+            return
+        self.viewer.set_guide_polylines(self._floor_buffer_guides(self._current_section))
     def _on_slice_selected(self, row):
         if row < 0 or row >= len(self._slices):
             self.viewer.set_active_slice(0, 0)
@@ -750,12 +881,22 @@ class MainWindow(QMainWindow):
             'fwd_idx': fwd_idx, 'up_idx': up_idx,
             'pts': section_pts,
         }
+        filtered_pts, _floor_level, floor_used = self._filter_floor_points(section_pts, up_idx)
+        floor_msg = ""
+        if self._floor_buffer_enabled():
+            floor_msg = (
+                f" | floor buffer: {self._spin_floor_buffer.value():.2f}m "
+                f"({len(section_pts):,}->{len(filtered_pts):,} pts)"
+            )
+            if not floor_used:
+                floor_msg += " fallback"
+        self._section_active = True
+        self._update_floor_buffer_guide()
         # 이전 투영 모드 저장 후 정사 + Front View
         self._prev_perspective = self.viewer.perspective
         self.viewer.perspective = False
         self.viewer_panel._act_ortho.setChecked(True)
         self.viewer.set_front_view()
-        self._section_active = True
         self._btn_close_section.setEnabled(True)
         self._btn_extract_contour.setEnabled(True)
         self._btn_measure.setEnabled(True)
@@ -775,8 +916,22 @@ class MainWindow(QMainWindow):
         sec = self._current_section
         method = self._contour_combo.currentData()
         method_label = self._contour_combo.currentText()
-        pts_2d = sec['pts'][:, [sec['side_idx'], sec['up_idx']]]
+        section_pts, _floor_level, floor_used = self._filter_floor_points(sec['pts'], sec['up_idx'])
+        pts_2d = section_pts[:, [sec['side_idx'], sec['up_idx']]]
+        floor_msg = ""
+        if self._floor_buffer_enabled():
+            floor_msg = (
+                f" | floor buffer: {self._spin_floor_buffer.value():.2f}m "
+                f"({len(sec['pts']):,}->{len(section_pts):,} pts)"
+            )
+            if not floor_used:
+                floor_msg += " fallback"
         kwargs = self._get_contour_kwargs(method)
+        if method == 'five_circle':
+            slice_index = self._slice_list.currentRow()
+            kwargs.update(self._five_circle_debug_kwargs(
+                slice_index, sec['y_pos'], self._spin_thickness.value(), len(section_pts)
+            ))
         self.viewer.clear_guide_polylines()
         elapsed = 0.0
         try:
@@ -802,6 +957,7 @@ class MainWindow(QMainWindow):
             )
         else:
             self.viewer.clear_polyline()
+            self._update_floor_buffer_guide()
             self._seg_table.setRowCount(0)
             self.statusbar.showMessage("외곽 추출 실패: 포인트 부족")
     def _points_2d_to_section_3d(self, points_2d, sec):
@@ -812,35 +968,33 @@ class MainWindow(QMainWindow):
         points_3d[:, sec['up_idx']] = points_2d[:, 1]
         return points_3d
     def _show_five_circle_guides_if_available(self, method, sec):
-        if method != 'five_circle' or not self._chk_five_circle_guides.isChecked():
-            return
-        info = getattr(PointCloud, 'last_contour_info', None)
-        if not info:
-            return
-        guides = []
-        for circle in info.get('circles', []):
-            pts_2d = circle.get('points')
-            color = circle.get('color', (0.7, 0.7, 0.7))
-            if pts_2d is None:
-                continue
-            guides.append((self._points_2d_to_section_3d(pts_2d, sec), color))
         guide_points = []
-        for item in info.get('centers', []):
-            point_2d = item.get('point')
-            color = item.get('color', (0.7, 0.7, 0.7))
-            size = item.get('size', 9.0)
-            if point_2d is None:
-                continue
-            point_3d = self._points_2d_to_section_3d(np.asarray(point_2d)[None, :], sec)[0]
-            guide_points.append((point_3d, color, size, item.get('name', '')))
-        for item in info.get('junctions', []):
-            point_2d = item.get('point')
-            color = item.get('color', (1.0, 0.0, 1.0))
-            size = item.get('size', 7.0)
-            if point_2d is None:
-                continue
-            point_3d = self._points_2d_to_section_3d(np.asarray(point_2d)[None, :], sec)[0]
-            guide_points.append((point_3d, color, size, ''))
+        guides = self._floor_buffer_guides(sec)
+        if method == 'five_circle' and self._chk_five_circle_guides.isChecked():
+            info = getattr(PointCloud, 'last_contour_info', None)
+            if info:
+                for circle in info.get('circles', []):
+                    pts_2d = circle.get('points')
+                    color = circle.get('color', (0.7, 0.7, 0.7))
+                    if pts_2d is None:
+                        continue
+                    guides.append((self._points_2d_to_section_3d(pts_2d, sec), color))
+                for item in info.get('centers', []):
+                    point_2d = item.get('point')
+                    color = item.get('color', (0.7, 0.7, 0.7))
+                    size = item.get('size', 9.0)
+                    if point_2d is None:
+                        continue
+                    point_3d = self._points_2d_to_section_3d(np.asarray(point_2d)[None, :], sec)[0]
+                    guide_points.append((point_3d, color, size, item.get('name', '')))
+                for item in info.get('junctions', []):
+                    point_2d = item.get('point')
+                    color = item.get('color', (1.0, 0.0, 1.0))
+                    size = item.get('size', 7.0)
+                    if point_2d is None:
+                        continue
+                    point_3d = self._points_2d_to_section_3d(np.asarray(point_2d)[None, :], sec)[0]
+                    guide_points.append((point_3d, color, size, ''))
         if guides:
             self.viewer.set_guide_polylines(guides)
         if guide_points:
@@ -966,12 +1120,13 @@ class MainWindow(QMainWindow):
         self._btn_measure.setChecked(False)
         self._btn_measure_clear.setEnabled(False)
         self.viewer.set_measure_active(False)
-        self.statusbar.showMessage("단면 닫기 → 정렬 뷰 복원")
+        self.statusbar.showMessage("단면 닫기 및 정렬 뷰 복원")
     # ── 전체 외곽 면 생성 ──
     def _batch_contour_surface(self):
         """모든 slice에서 외곽 추출 → extrusion → 삼각형 메시 생성."""
         if not self._slices or self.pc_aligned is None:
             return
+        start_time = time.perf_counter()
         conv = self.pc_aligned.convention
         fwd_idx = conv.forward_index
         side_idx = conv.side_index
@@ -1000,9 +1155,15 @@ class MainWindow(QMainWindow):
             section_pts = pts[mask]
             if len(section_pts) < 3:
                 continue
+            section_pts, _floor_level, _floor_used = self._filter_floor_points(section_pts, up_idx)
             pts_2d = section_pts[:, [side_idx, up_idx]]
+            section_kwargs = dict(kwargs)
+            if method == 'five_circle':
+                section_kwargs.update(self._five_circle_debug_kwargs(
+                    si, y_pos, thickness, len(section_pts)
+                ))
             try:
-                contour_2d = PointCloud.extract_contour(pts_2d, method=method, **kwargs)
+                contour_2d = PointCloud.extract_contour(pts_2d, method=method, **section_kwargs)
             except Exception:
                 contour_2d = PointCloud.extract_contour(pts_2d, method='radial')
             if len(contour_2d) < 3:
@@ -1035,6 +1196,7 @@ class MainWindow(QMainWindow):
                 all_verts.extend([p0, p1, p2, p1, p3, p2])
                 all_norms.extend([normal] * 6)
         progress.setValue(total)
+        elapsed = time.perf_counter() - start_time
         if progress.wasCanceled():
             self.statusbar.showMessage("면 생성 취소됨")
             return
@@ -1058,6 +1220,8 @@ class MainWindow(QMainWindow):
         )
         saved_msg = f" | GeoJSON: {os.path.basename(geojson_path)}" if geojson_path else ""
         mesh_msg = f"{n_tris} triangles" if build_mesh else "Mesh off"
+        elapsed_msg = f" | {elapsed:.3f} s"
+        saved_msg = elapsed_msg + saved_msg
         self.statusbar.showMessage(
             f"전체 외곽 면 생성 완료 | {total} slices | "
             f"{mesh_msg} | 방식: {method}{saved_msg}"
@@ -1067,18 +1231,60 @@ class MainWindow(QMainWindow):
         source_path = getattr(self.pc, 'filepath', None)
         if source_path:
             start_dir = os.path.dirname(source_path)
-        filepath, _ = QFileDialog.getOpenFileName(
+        filepaths, _ = QFileDialog.getOpenFileNames(
             self, "단면 GeoJSON 열기", start_dir,
             "GeoJSON (*.geojson *.json);;All Files (*)"
         )
-        if not filepath:
+        if not filepaths:
             return
+        if len(filepaths) > 2:
+            QMessageBox.warning(self, "GeoJSON", "GeoJSON 비교는 최대 2개 파일까지 가능합니다. 처음 2개 파일만 불러옵니다.")
+            filepaths = filepaths[:2]
         try:
-            self._load_section_geojson(filepath)
+            self._load_section_geojson_files(filepaths)
         except Exception as e:
             QMessageBox.critical(self, "GeoJSON 열기 실패", f"GeoJSON 파일을 열 수 없습니다:\n{e}")
 
     def _load_section_geojson(self, filepath):
+        self._load_section_geojson_files([filepath])
+
+    def _load_section_geojson_files(self, filepaths):
+        line_colors = [
+            (1.0, 0.0, 0.0),
+            (0.05, 0.35, 1.0),
+        ]
+        vertex_colors = [
+            (1.0, 0.25, 0.0),
+            (0.05, 0.65, 1.0),
+        ]
+        all_polylines = []
+        vertex_clouds = []
+        total_sections = 0
+
+        for idx, filepath in enumerate(filepaths[:2]):
+            polylines, vertex_points = self._load_section_geojson_data(
+                filepath, line_colors[idx]
+            )
+            all_polylines.extend(polylines)
+            total_sections += len(polylines)
+            if vertex_points:
+                vertex_clouds.append((
+                    np.vstack(vertex_points),
+                    vertex_colors[idx],
+                    self._spin_vtx_size.value()
+                ))
+
+        if not all_polylines:
+            raise ValueError("No displayable CL_SECTION LineString found.")
+        self.viewer.clear_polyline()
+        self.viewer.set_guide_polylines(all_polylines)
+        self.viewer.set_guide_vertex_clouds(vertex_clouds)
+        names = ", ".join(os.path.basename(path) for path in filepaths[:2])
+        self.statusbar.showMessage(
+            f"단면 GeoJSON 표시 | {names} | {total_sections} sections"
+        )
+
+    def _load_section_geojson_data(self, filepath, line_color):
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
         features = data.get("features", [])
@@ -1091,8 +1297,6 @@ class MainWindow(QMainWindow):
         up_idx = conv.up_index
         polylines = []
         vertex_points = []
-        line_color = (1.0, 0.95, 0.05)
-        vertex_color = (1.0, 0.3, 0.0)
 
         for feature in features:
             props = feature.get("properties", {})
@@ -1105,24 +1309,22 @@ class MainWindow(QMainWindow):
             if coords.ndim != 2 or coords.shape[0] < 2 or coords.shape[1] < 2:
                 continue
             origin = self._section_origin_from_feature(props, fwd_idx)
-            y_pos = float(origin[fwd_idx]) if origin is not None else 0.0
+            offset = self._geojson_offset()
+            subtract_offset = self._geojson_should_subtract_offset(
+                coords, origin, side_idx, fwd_idx, up_idx
+            )
+            side_offset = offset[side_idx] if subtract_offset else 0.0
+            fwd_offset = offset[fwd_idx] if subtract_offset else 0.0
+            up_offset = offset[up_idx] if subtract_offset else 0.0
+            y_pos = float(origin[fwd_idx] - fwd_offset) if origin is not None else 0.0
             points_3d = np.zeros((len(coords), 3), dtype=np.float64)
-            points_3d[:, side_idx] = coords[:, 0]
+            points_3d[:, side_idx] = coords[:, 0] - side_offset
             points_3d[:, fwd_idx] = y_pos
-            points_3d[:, up_idx] = coords[:, 1]
+            points_3d[:, up_idx] = coords[:, 1] - up_offset
             polylines.append((points_3d, line_color))
             vertex_points.append(points_3d)
 
-        if not polylines:
-            raise ValueError("표시 가능한 CL_SECTION LineString이 없습니다.")
-        self.viewer.clear_polyline()
-        self.viewer.set_guide_polylines(polylines)
-        self.viewer.set_guide_vertex_clouds([
-            (np.vstack(vertex_points), vertex_color, self._spin_vtx_size.value())
-        ])
-        self.statusbar.showMessage(
-            f"단면 GeoJSON 표시 | {os.path.basename(filepath)} | {len(polylines)} sections"
-        )
+        return polylines, vertex_points
 
     def _section_origin_from_feature(self, props, fwd_idx):
         shapes = props.get("SectionShapes", [])
@@ -1133,12 +1335,43 @@ class MainWindow(QMainWindow):
             return None
         return np.asarray(origin, dtype=np.float64)
 
+    def _geojson_offset(self):
+        offset = getattr(self.pc, 'offset', None)
+        if offset is None:
+            return np.zeros(3, dtype=np.float64)
+        return np.asarray(offset, dtype=np.float64)
+
+    def _geojson_should_subtract_offset(self, coords, origin, side_idx, fwd_idx, up_idx):
+        offset = self._geojson_offset()
+        if np.max(np.abs(offset)) <= 1e-9:
+            return False
+
+        pts = None
+        if self.pc_aligned is not None and self.pc_aligned.points is not None:
+            pts = self.pc_aligned.points
+        elif self.pc is not None and self.pc.points is not None:
+            pts = self.pc.points
+        if pts is None or len(pts) == 0:
+            return True
+
+        center = np.zeros(3, dtype=np.float64)
+        center[side_idx] = float(np.mean(coords[:, 0]))
+        center[fwd_idx] = float(origin[fwd_idx]) if origin is not None else 0.0
+        center[up_idx] = float(np.mean(coords[:, 1]))
+
+        cloud_center = np.mean(pts, axis=0)
+        no_offset_dist = float(np.linalg.norm(center - cloud_center))
+        subtract_dist = float(np.linalg.norm((center - offset) - cloud_center))
+        return subtract_dist < no_offset_dist
+
     def _make_section_geojson_feature(self, slice_index, y_pos, thickness, contour_2d,
                                       side_idx, fwd_idx, up_idx):
         contour_2d = np.asarray(contour_2d, dtype=np.float64)
         origin = self._section_origin_from_contour(contour_2d, y_pos, side_idx, fwd_idx, up_idx)
+        offset = self._geojson_offset()
+        origin_out = origin + offset
         coordinates = [
-            [float(pt[0]), float(pt[1]), 0.0]
+            [float(pt[0] + offset[side_idx]), float(pt[1] + offset[up_idx]), 0.0]
             for pt in contour_2d
         ]
         return {
@@ -1152,7 +1385,7 @@ class MainWindow(QMainWindow):
                         "OffsetY": 0,
                         "Thickness": float(thickness),
                         "ThicknessUnit": "m",
-                        "SectionOrigin": [float(v) for v in origin],
+                        "SectionOrigin": [float(v) for v in origin_out],
                     }
                 ],
             },
