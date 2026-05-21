@@ -324,6 +324,9 @@ class MainWindow(QMainWindow):
         self._btn_open_section_geojson = QPushButton("단면 GeoJSON 열기")
         self._btn_open_section_geojson.clicked.connect(self._open_section_geojson)
         layout.addWidget(self._btn_open_section_geojson)
+        self._chk_keep_section_drawings = QCheckBox("기존 단면 유지")
+        self._chk_keep_section_drawings.setChecked(False)
+        layout.addWidget(self._chk_keep_section_drawings)
         dock.setWidget(w)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
     def _busy(self, busy=True):
@@ -611,9 +614,9 @@ class MainWindow(QMainWindow):
         fwd_label = "Y" if conv == AxisConvention.ENU else "Z"
         up_label = "Z" if conv == AxisConvention.ENU else "Y"
         axes_list = [
-            (conv.forward_vector(), (1.0, 1.0, 0.0), f"U ??{fwd_label}"),
-            (conv.side_vector(),    (0.0, 1.0, 1.0), "V ??X"),
-            (conv.up_vector(),      (1.0, 0.0, 1.0), f"W ??{up_label}"),
+            (conv.forward_vector(), (1.0, 1.0, 0.0), f"U → {fwd_label}"),
+            (conv.side_vector(),    (0.0, 1.0, 1.0), "V → X"),
+            (conv.up_vector(),      (1.0, 0.0, 1.0), f"W → {up_label}"),
         ]
         pmin = aligned_points.min(axis=0)
         pmax = aligned_points.max(axis=0)
@@ -669,7 +672,8 @@ class MainWindow(QMainWindow):
         self._btn_batch_surface.setEnabled(False)
         self.viewer.remove_layer("단면면")
         self.viewer.clear_slices()
-        self.viewer.clear_polyline()
+        if not self._keep_section_drawings():
+            self.viewer.clear_polyline()
         self._btn_show_section.setEnabled(False)
         self._btn_clear_slices.setEnabled(False)
         self._btn_extract_contour.setEnabled(False)
@@ -874,7 +878,8 @@ class MainWindow(QMainWindow):
         self._chk_aligned.setChecked(False)
         self.viewer.set_layer_visible("원본", False)
         self._chk_original.setChecked(False)
-        self.viewer.clear_polyline()
+        if not self._keep_section_drawings():
+            self.viewer.clear_polyline()
         # 현재 단면 정보 저장 (외곽 추출용)
         self._current_section = {
             'y_pos': y_pos, 'side_idx': side_idx,
@@ -932,7 +937,10 @@ class MainWindow(QMainWindow):
             kwargs.update(self._five_circle_debug_kwargs(
                 slice_index, sec['y_pos'], self._spin_thickness.value(), len(section_pts)
             ))
-        self.viewer.clear_guide_polylines()
+        if self._keep_section_drawings():
+            self._preserve_current_polyline_as_guide()
+        else:
+            self.viewer.clear_guide_polylines()
         elapsed = 0.0
         try:
             start_time = time.perf_counter()
@@ -956,7 +964,8 @@ class MainWindow(QMainWindow):
                 f"외곽 추출 ({method_label}) | {len(contour_2d)} pts | {elapsed:.3f} s"
             )
         else:
-            self.viewer.clear_polyline()
+            if not self._keep_section_drawings():
+                self.viewer.clear_polyline()
             self._update_floor_buffer_guide()
             self._seg_table.setRowCount(0)
             self.statusbar.showMessage("외곽 추출 실패: 포인트 부족")
@@ -996,9 +1005,11 @@ class MainWindow(QMainWindow):
                     point_3d = self._points_2d_to_section_3d(np.asarray(point_2d)[None, :], sec)[0]
                     guide_points.append((point_3d, color, size, ''))
         if guides:
-            self.viewer.set_guide_polylines(guides)
+            existing_guides = list(getattr(self.viewer, '_guide_polylines', [])) if self._keep_section_drawings() else []
+            self.viewer.set_guide_polylines(existing_guides + guides)
         if guide_points:
-            self.viewer.set_guide_points(guide_points)
+            existing_points = list(getattr(self.viewer, '_guide_points', [])) if self._keep_section_drawings() else []
+            self.viewer.set_guide_points(existing_points + guide_points)
     def _analyze_segments(self, contour_2d, pts_2d):
         """각 segment별 수직방향 검색범위 내 점군의 최대거리 계산."""
         n = len(contour_2d)
@@ -1099,7 +1110,8 @@ class MainWindow(QMainWindow):
         )
     def _close_section(self):
         self.viewer.remove_layer("단면")
-        self.viewer.clear_polyline()
+        if not self._keep_section_drawings():
+            self.viewer.clear_polyline()
         self.viewer.clear_marker()
         self.viewer._highlight_seg = None
         self._seg_table.setRowCount(0)
@@ -1250,8 +1262,8 @@ class MainWindow(QMainWindow):
 
     def _load_section_geojson_files(self, filepaths):
         line_colors = [
-            (1.0, 0.0, 0.0),
-            (0.05, 0.35, 1.0),
+            (1.0, 0.25, 0.0),
+            (0.05, 0.65, 1.0),
         ]
         vertex_colors = [
             (1.0, 0.25, 0.0),
@@ -1276,13 +1288,31 @@ class MainWindow(QMainWindow):
 
         if not all_polylines:
             raise ValueError("No displayable CL_SECTION LineString found.")
-        self.viewer.clear_polyline()
-        self.viewer.set_guide_polylines(all_polylines)
-        self.viewer.set_guide_vertex_clouds(vertex_clouds)
+        if self._keep_section_drawings():
+            existing_polylines = list(getattr(self.viewer, '_guide_polylines', []))
+            existing_vertex_clouds = list(getattr(self.viewer, '_guide_vertex_clouds', []))
+            self.viewer.set_guide_polylines(existing_polylines + all_polylines)
+            self.viewer.set_guide_vertex_clouds(existing_vertex_clouds + vertex_clouds)
+        else:
+            self.viewer.clear_polyline()
+            self.viewer.set_guide_polylines(all_polylines)
+            self.viewer.set_guide_vertex_clouds(vertex_clouds)
         names = ", ".join(os.path.basename(path) for path in filepaths[:2])
         self.statusbar.showMessage(
             f"단면 GeoJSON 표시 | {names} | {total_sections} sections"
         )
+
+    def _keep_section_drawings(self):
+        checkbox = getattr(self, '_chk_keep_section_drawings', None)
+        return checkbox is not None and checkbox.isChecked()
+
+    def _preserve_current_polyline_as_guide(self):
+        polyline = getattr(self.viewer, '_polyline', None)
+        if polyline is None or len(polyline) < 2:
+            return
+        existing_polylines = list(getattr(self.viewer, '_guide_polylines', []))
+        existing_polylines.append((np.asarray(polyline, dtype=np.float32).copy(), (1.0, 1.0, 0.0)))
+        self.viewer.set_guide_polylines(existing_polylines)
 
     def _load_section_geojson_data(self, filepath, line_color):
         with open(filepath, "r", encoding="utf-8") as f:
