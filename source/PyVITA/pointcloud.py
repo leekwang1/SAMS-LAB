@@ -529,13 +529,36 @@ class PointCloud:
             return PointCloud._contour_grid_ms(points_2d, kwargs.get('grid_size', 0.05))
         elif method == 'five_circle':
             from five_circle_fit import fit_five_circle_contour
+            fit_points = points_2d
+            if kwargs.get('preprocess_radial', False):
+                radial_points = PointCloud._contour_radial(
+                    points_2d,
+                    kwargs.get('preprocess_radial_bins', 360),
+                    kwargs.get('preprocess_radial_min_radius', 1.0),
+                    None,
+                    kwargs.get('preprocess_radial_midline', True),
+                    kwargs.get('preprocess_radial_outer_percentile', 90.0),
+                )
+                if len(radial_points) >= 10:
+                    fit_points = radial_points
             contour, info = fit_five_circle_contour(
-                points_2d,
+                fit_points,
                 n_per_arc=kwargs.get('n_per_arc', 160),
                 n_circle=kwargs.get('n_circle', 240),
                 debug_path=kwargs.get('debug_path'),
                 debug_meta=kwargs.get('debug_meta'),
             )
+            if kwargs.get('preprocess_radial', False):
+                info = dict(info or {})
+                info['preprocess_radial'] = {
+                    'enabled': True,
+                    'input_count': int(len(points_2d)),
+                    'fit_count': int(len(fit_points)),
+                    'bins': int(kwargs.get('preprocess_radial_bins', 360)),
+                    'min_radius': float(kwargs.get('preprocess_radial_min_radius', 1.0)),
+                    'midline': bool(kwargs.get('preprocess_radial_midline', True)),
+                    'outer_percentile': float(kwargs.get('preprocess_radial_outer_percentile', 90.0)),
+                }
             PointCloud.last_contour_info = info
             return contour
         elif method == 'radial_midline':
