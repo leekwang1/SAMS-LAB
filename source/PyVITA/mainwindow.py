@@ -1427,18 +1427,28 @@ class MainWindow(QMainWindow):
             if coords.ndim != 2 or coords.shape[0] < 2 or coords.shape[1] < 2:
                 continue
             origin = self._section_origin_from_feature(props, fwd_idx)
+            local_coordinates = self._section_coordinates_are_local(props)
             offset = self._geojson_offset()
+            coords_for_offset = coords
+            if local_coordinates and origin is not None:
+                coords_for_offset = coords.copy()
+                coords_for_offset[:, 0] += origin[side_idx]
+                coords_for_offset[:, 1] += origin[up_idx]
             subtract_offset = self._geojson_should_subtract_offset(
-                coords, origin, side_idx, fwd_idx, up_idx
+                coords_for_offset, origin, side_idx, fwd_idx, up_idx
             )
             side_offset = offset[side_idx] if subtract_offset else 0.0
             fwd_offset = offset[fwd_idx] if subtract_offset else 0.0
             up_offset = offset[up_idx] if subtract_offset else 0.0
             y_pos = float(origin[fwd_idx] - fwd_offset) if origin is not None else 0.0
             points_3d = np.zeros((len(coords), 3), dtype=np.float64)
-            points_3d[:, side_idx] = coords[:, 0] - side_offset
+            if local_coordinates and origin is not None:
+                points_3d[:, side_idx] = coords[:, 0] + origin[side_idx] - side_offset
+                points_3d[:, up_idx] = coords[:, 1] + origin[up_idx] - up_offset
+            else:
+                points_3d[:, side_idx] = coords[:, 0] - side_offset
+                points_3d[:, up_idx] = coords[:, 1] - up_offset
             points_3d[:, fwd_idx] = y_pos
-            points_3d[:, up_idx] = coords[:, 1] - up_offset
             polylines.append((points_3d, line_color))
             vertex_points.append(points_3d)
 
@@ -1452,6 +1462,12 @@ class MainWindow(QMainWindow):
         if origin is None or len(origin) <= fwd_idx:
             return None
         return np.asarray(origin, dtype=np.float64)
+
+    def _section_coordinates_are_local(self, props):
+        shapes = props.get("SectionShapes", [])
+        if not shapes:
+            return False
+        return shapes[0].get("CoordinateMode") == "SectionOriginLocal"
 
     def _geojson_offset(self):
         offset = getattr(self.pc, 'offset', None)
@@ -1490,7 +1506,11 @@ class MainWindow(QMainWindow):
         offset = self._geojson_offset()
         origin_out = origin + offset
         coordinates = [
-            [float(pt[0] + offset[side_idx]), float(pt[1] + offset[up_idx]), 0.0]
+            [
+                float(pt[0] - origin[side_idx]),
+                float(pt[1] - origin[up_idx]),
+                0.0,
+            ]
             for pt in contour_2d
         ]
         return {
@@ -1505,6 +1525,7 @@ class MainWindow(QMainWindow):
                         "Thickness": float(thickness),
                         "ThicknessUnit": "m",
                         "SectionOrigin": [float(v) for v in origin_out],
+                        "CoordinateMode": "SectionOriginLocal",
                     }
                 ],
             },
