@@ -1268,10 +1268,15 @@ class MainWindow(QMainWindow):
                 contour_2d = PointCloud.extract_contour(pts_2d, method='radial')
             if len(contour_2d) < 3:
                 continue
+            contour_info = (
+                getattr(PointCloud, 'last_contour_info', None)
+                if method == 'five_circle'
+                else None
+            )
             section_features.append(
                 self._make_section_geojson_feature(
                     si, y_pos, thickness, contour_2d,
-                    side_idx, fwd_idx, up_idx
+                    side_idx, fwd_idx, up_idx, contour_info
                 )
             )
             if not build_mesh:
@@ -1455,6 +1460,13 @@ class MainWindow(QMainWindow):
         return polylines, vertex_points
 
     def _section_origin_from_feature(self, props, fwd_idx):
+        flat_origin_keys = ("SectionOriginX", "SectionOriginY", "SectionOriginZ")
+        if all(key in props for key in flat_origin_keys):
+            return np.asarray(
+                [props[key] for key in flat_origin_keys],
+                dtype=np.float64,
+            )
+
         shapes = props.get("SectionShapes", [])
         if not shapes:
             return None
@@ -1464,6 +1476,9 @@ class MainWindow(QMainWindow):
         return np.asarray(origin, dtype=np.float64)
 
     def _section_coordinates_are_local(self, props):
+        if props.get("CoordinateMode") == "SectionOriginLocal":
+            return True
+
         shapes = props.get("SectionShapes", [])
         if not shapes:
             return False
@@ -1499,7 +1514,7 @@ class MainWindow(QMainWindow):
         return subtract_dist < no_offset_dist
 
     def _make_section_geojson_feature(self, slice_index, y_pos, thickness, contour_2d,
-                                      side_idx, fwd_idx, up_idx):
+                                      side_idx, fwd_idx, up_idx, contour_info=None):
         contour_2d = np.asarray(contour_2d, dtype=np.float64)
         contour_2d = self._ensure_counterclockwise_contour(contour_2d)
         origin = self._section_origin_from_contour(contour_2d, y_pos, side_idx, fwd_idx, up_idx)
@@ -1513,26 +1528,50 @@ class MainWindow(QMainWindow):
             ]
             for pt in contour_2d
         ]
+        properties = {
+            "DataType": "CL_SECTION",
+            "SectionID": f"SID_{slice_index + 1:04d}",
+            "OffsetX": 0,
+            "OffsetY": 0,
+            "Thickness": float(thickness),
+            "ThicknessUnit": "m",
+            "SectionOriginX": float(origin_out[0]),
+            "SectionOriginY": float(origin_out[1]),
+            "SectionOriginZ": float(origin_out[2]),
+            "CoordinateMode": "SectionOriginLocal",
+        }
+        five_circle = self._five_circle_geojson_properties(
+            contour_info, origin, side_idx, up_idx
+        )
+        if five_circle is not None:
+            properties.update(five_circle)
+
         return {
             "type": "Feature",
-            "properties": {
-                "DataType": "CL_SECTION",
-                "SectionID": f"SID_{slice_index + 1:04d}",
-                "SectionShapes": [
-                    {
-                        "OffsetX": 0,
-                        "OffsetY": 0,
-                        "Thickness": float(thickness),
-                        "ThicknessUnit": "m",
-                        "SectionOrigin": [float(v) for v in origin_out],
-                        "CoordinateMode": "SectionOriginLocal",
-                    }
-                ],
-            },
+            "properties": properties,
             "geometry": {
                 "type": "LineString",
                 "coordinates": coordinates,
             },
+        }
+
+    def _five_circle_geojson_properties(self, contour_info, origin, side_idx, up_idx):
+        if not contour_info:
+            return None
+        circles = contour_info.get("circles", [])
+        o1 = next((circle for circle in circles if circle.get("name") == "O1"), None)
+        if o1 is None:
+            return None
+        center = np.asarray(o1.get("center", []), dtype=np.float64)
+        radius = o1.get("radius")
+        if center.shape != (2,) or radius is None:
+            return None
+        if not np.all(np.isfinite(center)) or not np.isfinite(float(radius)):
+            return None
+        return {
+            "FiveCircle_C1_x": float(center[0] - origin[side_idx]),
+            "FiveCircle_C1_y": float(center[1] - origin[up_idx]),
+            "FiveCircle_R1": float(radius),
         }
 
     def _ensure_counterclockwise_contour(self, contour_2d):
