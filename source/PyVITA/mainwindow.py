@@ -1485,6 +1485,7 @@ class MainWindow(QMainWindow):
     def _make_section_geojson_feature(self, slice_index, y_pos, thickness, contour_2d,
                                       side_idx, fwd_idx, up_idx):
         contour_2d = np.asarray(contour_2d, dtype=np.float64)
+        contour_2d = self._ensure_counterclockwise_contour(contour_2d)
         origin = self._section_origin_from_contour(contour_2d, y_pos, side_idx, fwd_idx, up_idx)
         offset = self._geojson_offset()
         origin_out = origin + offset
@@ -1512,6 +1513,21 @@ class MainWindow(QMainWindow):
                 "coordinates": coordinates,
             },
         }
+
+    def _ensure_counterclockwise_contour(self, contour_2d):
+        """Return contour points in counterclockwise order."""
+        contour_2d = np.asarray(contour_2d, dtype=np.float64)
+        if contour_2d.ndim != 2 or contour_2d.shape[0] < 3 or contour_2d.shape[1] < 2:
+            return contour_2d
+
+        x = contour_2d[:, 0]
+        y = contour_2d[:, 1]
+        signed_area_twice = float(
+            np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
+        )
+        if signed_area_twice < 0.0:
+            return contour_2d[::-1].copy()
+        return contour_2d
 
     def _section_origin_from_contour(self, contour_2d, y_pos, side_idx, fwd_idx, up_idx):
         side = contour_2d[:, 0]
